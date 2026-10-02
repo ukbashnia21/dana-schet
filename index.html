@@ -64,6 +64,11 @@ textarea.field{width:100%;margin-top:8px;font-size:12px}
 .lvlpick select{font-weight:500;font-size:16px}
 .lvlinfo{display:flex;gap:14px;color:var(--soft);font-size:14px;align-items:center}
 .stars{color:#E0A800;letter-spacing:2px;font-size:18px}
+.team{grid-column:1/-1;border-top:1.5px dashed var(--line);padding-top:14px;display:flex;flex-direction:column;gap:8px}
+.teamhead{display:flex;align-items:baseline;gap:10px}
+.teamrow{display:flex;gap:10px;flex-wrap:wrap}
+.teamrow .who{border:1.5px solid var(--line);border-radius:999px;padding:3px 12px;font-size:14px}
+.teamrow .who.ok{border-color:var(--green);color:var(--green)}
 .todaystat{display:flex;gap:12px;border-top:1.5px dashed var(--line);padding-top:16px}
 .todaystat div{flex:1;display:flex;flex-direction:column}
 .todaystat b{font:700 28px var(--hd)}.todaystat span{color:var(--soft);font-size:14px}
@@ -181,7 +186,7 @@ textarea.field{width:100%;margin-top:8px;font-size:12px}
 <header><h1>Устный счёт<small id="hello">Дана</small></h1><div id="stats"></div></header>
 <nav id="nav"></nav>
 <main id="main"></main>
-<div id="sync" data-s="local"></div><div class="ver">версия 4</div>
+<div id="sync" data-s="local"></div><div class="ver">версия 5</div>
 </div>
 <script>
 // ===== Генераторы задач =====
@@ -381,13 +386,22 @@ const plevel=()=>Math.floor(Math.sqrt(S.xp/150))+1;
 const lvlXp=l=>150*(l-1)*(l-1);
 
 // ===== Синхронизация с базой артефакта =====
-let DB=null, writing=false, dirty=false;
+let DB=null, writing=false, dirty=false, UNSUB=[];
 function save(){S.updatedAt=Date.now();try{localStorage.setItem(lsKey(),JSON.stringify(S));}catch(e){}pushState();pushDays();}
 function saveSess(){try{localStorage.setItem(LS_S,JSON.stringify(SESS.slice(-1500)));}catch(e){}}
 async function pushState(){if(!DB)return;if(writing){dirty=true;return;}writing=true;
  try{await DB.doc('players/'+WHO).set(JSON.parse(JSON.stringify(S)));}catch(e){setSync('error');}
  writing=false;if(dirty){dirty=false;pushState();}else setSync('ok');}
 async function pushSession(s){if(!DB)return;try{await DB.collection('sessions').doc(s.id).set(Object.assign({who:WHO},s));}catch(e){}}
+// ===== Команда =====
+let TEAMDAYS={dana:{},papa:{}};
+const other=()=>WHO==='dana'?'papa':'dana';
+const teamDone=k=>!!((TEAMDAYS.dana||{})[k])&&!!((TEAMDAYS.papa||{})[k]);
+function teamSteps(){const a=TEAMDAYS.dana||{},b=TEAMDAYS.papa||{};return Object.keys(a).filter(k=>a[k]&&b[k]).length;}
+function teamStreak(){let n=0;const d=new Date();if(!teamDone(dkey(d)))d.setDate(d.getDate()-1);
+ while(teamDone(dkey(d))){n++;d.setDate(d.getDate()-1);}return n;}
+const partnerDone=k=>!!((TEAMDAYS[other()]||{})[k]);
+
 // Для команды публикуем только факт «норма выполнена» по датам, без подробностей
 async function pushDays(){if(!DB||!WHO)return;
  try{await DB.doc('team/days').set({[WHO]:Object.fromEntries(Object.entries(S.days).map(([k,d])=>[k,taskDone(k)]))},{merge:true});}catch(e){}}
@@ -405,6 +419,9 @@ async function initDb(){
  }catch(e){}
  if(!db){setSync('local');return;}
  DB=db;
+ // Отписаться от подписок прежнего игрока: иначе его onSnapshot перезапишет
+ // состояние нового и данные перемешаются.
+ UNSUB.forEach(f=>{try{f();}catch(e){}});UNSUB=[];
  try{const snap=await db.doc('players/'+WHO).get();
   if(snap.exists&&snap.data().updatedAt>S.updatedAt){S=Object.assign(fresh(),JSON.parse(JSON.stringify(snap.data())));try{localStorage.setItem(lsKey(),JSON.stringify(S));}catch(e){}}
   else if(S.updatedAt)await db.doc('players/'+WHO).set(JSON.parse(JSON.stringify(S)));
@@ -414,7 +431,10 @@ async function initDb(){
   SESS.sort((a,b)=>a.ts-b.ts);saveSess();
   for(const s of SESS.slice(-200))if(!remote.has(s.id))await pushSession(s);
   setSync('ok');
-  db.doc('players/'+WHO).onSnapshot(sn=>{if(!sn.exists)return;const d=sn.data();if(d.updatedAt>S.updatedAt&&!RUN){S=Object.assign(fresh(),JSON.parse(JSON.stringify(d)));try{localStorage.setItem(lsKey(),JSON.stringify(S));}catch(e){}render();}});
+  UNSUB.push(db.doc('team/days').onSnapshot(sn=>{if(!sn.exists)return;
+   const d=JSON.parse(JSON.stringify(sn.data()));TEAMDAYS={dana:d.dana||{},papa:d.papa||{}};
+   if(!RUN&&!DUO)render();}));
+  UNSUB.push(db.doc('players/'+WHO).onSnapshot(sn=>{if(!sn.exists)return;const d=sn.data();if(d.updatedAt>S.updatedAt&&!RUN&&!DUO){S=Object.assign(fresh(),JSON.parse(JSON.stringify(d)));try{localStorage.setItem(lsKey(),JSON.stringify(S));}catch(e){}render();}}));
  }catch(e){setSync('error');}
  render();}
 
@@ -470,7 +490,9 @@ function vWho(){return `<section class="page narrow who">
  <div class="row" style="margin-top:18px">
   <button class="btn primary huge" onclick="setWho('dana')">Дана</button>
   <button class="btn huge" onclick="setWho('papa')">Папа</button>
- </div></section>`;}
+ </div>
+ <div class="row" style="margin-top:10px"><button class="btn" onclick="setWho('dana');setTimeout(startDuo,400)">Заниматься вдвоём</button></div>
+ </section>`;}
 function setWho(id){
  if(id==='papa'&&S.pin){const v=prompt('PIN папы');if(v!==S.pin)return;}
  // разовый перенос прогресса, накопленного до разделения профилей
@@ -481,6 +503,43 @@ function setWho(id){
  S=fresh();S.name=PLAYERS[id].name;SESS=[];
  try{const x=JSON.parse(localStorage.getItem(LS+'-'+id)||'null');if(x&&x.v)S=Object.assign(fresh(),x);}catch(e){}
  PARENT_OK=false;render();initDb();}
+// Сохранить текущего игрока и загрузить другого: сначала местный профиль,
+// затем облачный, если он свежее — иначе занятия с другого устройства затрут новые.
+async function swapTo(id){
+ save();
+ WHO=id;try{localStorage.setItem(LS_WHO,id);}catch(e){}
+ S=fresh();S.name=PLAYERS[id].name;SESS=[];
+ try{const x=JSON.parse(localStorage.getItem(LS+'-'+id)||'null');if(x&&x.v)S=Object.assign(fresh(),x);}catch(e){}
+ if(DB){try{const sn=await DB.doc('players/'+id).get();
+  if(sn.exists&&(sn.data().updatedAt||0)>(S.updatedAt||0))S=Object.assign(fresh(),JSON.parse(JSON.stringify(sn.data())));
+ }catch(e){}}
+ try{localStorage.setItem(lsKey(),JSON.stringify(S));}catch(e){}
+ await initDb();            // переподключить базу и подписки под нового игрока
+ await pushDays();}         // сразу опубликовать его дни для команды
+
+// ===== Совместный заход: две минуты подряд =====
+let DUO=null;
+async function startDuo(){
+ DUO={order:['dana','papa'],idx:0,res:[]};
+ if(WHO!=='dana')await swapTo('dana');
+ render();startCh(curLevel());}
+async function duoNext(){
+ if(!DUO)return;
+ DUO.idx++;
+ if(DUO.idx>=DUO.order.length){const r=DUO.res;DUO=null;showDuoResult(r);return;}
+ await swapTo(DUO.order[DUO.idx]);
+ render();startCh(curLevel());}
+function duoCancel(){DUO=null;render();}
+function showDuoResult(res){
+ const total=res.reduce((s,r)=>s+r.ok,0),k=TODAY();
+ $('#main').innerHTML=`<section class="page result">
+  <h2>Занимались вдвоём</h2>
+  <p class="big">Вместе решили ${plural(total,'пример','примера','примеров')}</p>
+  <ul class="reqs">${res.map(r=>`<li><span>${esc(r.name)}</span><b>${r.ok} из ${r.n}</b></li>`).join('')}</ul>
+  ${teamDone(k)?'<p class="pen big">День команды засчитан — поднялись на ступень!</p>':'<p class="muted">Ступень засчитается, когда норму выполнят оба.</p>'}
+  <div class="row"><button class="btn primary" onclick="render()">На главную</button></div></section>`;
+ $('#nav').innerHTML='';}
+
 function clearWho(){if(!confirm('Сменить игрока?'))return;try{localStorage.removeItem(LS_WHO);}catch(e){}WHO=null;DB=null;PARENT_OK=false;render();}
 
 // ===== Навигация =====
@@ -501,7 +560,7 @@ function render(){
 function curLevel(){const t=S.settings.taskLevel;if(t!=='auto'&&unlocked(+t))return +t;return window._chosen&&unlocked(window._chosen)?window._chosen:frontier();}
 function dueMistakes(){const now=Date.now();return S.mistakes.filter(m=>m.due<=now);}
 
-function vToday(){const k=TODAY(),d=day(k),per=S.settings.perDay,lv=curLevel(),L=LEVELS[lv-1],due=dueMistakes().length;
+function vToday(){const k=TODAY(),d=day(k),per=S.settings.perDay,lv=curLevel(),L=LEVELS[lv-1],due=dueMistakes().length,myDoneToday=taskDone(k);
  const boxes=Array.from({length:per},(_,i)=>`<span class="box${i<d.ch?' done':''}">${i<d.ch?'✓':''}</span>`).join('');
  const done=taskDone(k);
  const opts=LEVELS.filter(x=>unlocked(x.id)).map(x=>`<option value="${x.id}">${x.id}. ${esc(x.name)}</option>`).join('');
@@ -522,6 +581,15 @@ function vToday(){const k=TODAY(),d=day(k),per=S.settings.perDay,lv=curLevel(),L
   <button class="btn primary huge" onclick="startCh(${lv})">Начать минуту</button>
   <button class="btn" ${due?'':'disabled'} onclick="startRv()">Работа над ошибками${due?` · ${due}`:''}</button>
   ${!due&&S.mistakes.length?`<p class="muted small">Следующие ошибки вернутся на повтор позже — так лучше запоминается.</p>`:''}
+ </div>
+ <div class="team">
+  <div class="teamhead"><b>Команда</b><span class="muted small">ступеней ${teamSteps()} · серия ${teamStreak()}</span></div>
+  <div class="teamrow">
+   <span class="who ${myDoneToday?'ok':''}">${esc(PLAYERS[WHO].name)}: ${myDoneToday?'готово':'ещё нет'}</span>
+   <span class="who ${partnerDone(k)?'ok':''}">${esc(PLAYERS[other()].name)}: ${partnerDone(k)?'готово':'ещё нет'}</span>
+  </div>
+  ${teamDone(k)?'<p class="pen">День команды засчитан — поднялись на ступень!</p>':'<p class="muted small">Ступень даётся, когда задание выполнили оба. Личный прогресс копится в любом случае.</p>'}
+  <div class="row"><button class="btn" onclick="startDuo()">Заниматься вдвоём</button></div>
  </div>
  <div class="todaystat">
   <div><b>${Math.round(d.sec/60)}</b><span>мин сегодня</span></div>
@@ -719,10 +787,17 @@ function finish(){const r=RUN;RUN=null;const k=TODAY(),d=day(k),items=r.items,ok
   ${got.map(g=>`<p class="pen big">Достижение: ${esc(g)}!</p>`).join('')}
   ${!wasDone&&taskDone(k)?`<p class="pen big">Задание на сегодня выполнено!</p>`:r.mode==='ch'?`<p class="muted">Сегодня: ${d.ch} из ${S.settings.perDay}</p>`:''}
  </div>${grade?`<div class="grade" aria-label="Оценка ${grade}">${grade}</div>`:''}</div>
- <div class="row">${r.mode==='ch'?`<button class="btn primary huge" onclick="startCh(${r.lvl})">Ещё минуту</button>`:''}${wrong&&r.mode==='ch'?`<button class="btn" onclick="startRvNow()">Разобрать ошибки (${wrong})</button>`:''}<button class="btn" onclick="render()">На главную</button></div>
+ <div class="row">${DUO?duoButtons(ok,n):''}${!DUO&&r.mode==='ch'?`<button class="btn primary huge" onclick="startCh(${r.lvl})">Ещё минуту</button>`:''}${!DUO&&wrong&&r.mode==='ch'?`<button class="btn" onclick="startRvNow()">Разобрать ошибки (${wrong})</button>`:''}${DUO?'':'<button class="btn" onclick="render()">На главную</button>'}</div>
  <h3>Разбор</h3>${n?reviewHtml(items):'<p class="muted">Ни одного ответа.</p>'}</section>`;
  $('#stats').innerHTML=`<span class="chip">🔥 ${streak()}</span><span class="chip">🪙 ${S.coins}</span><span class="chip strong">${overall()}</span>`;}
 function startRvNow(){startRv();}
+// Во время совместного захода вместо обычных кнопок — передача хода
+function duoButtons(ok,n){
+ DUO.res.push({who:WHO,name:PLAYERS[WHO].name,ok,n});
+ const nxt=DUO.order[DUO.idx+1];
+ return nxt
+  ? `<button class="btn primary huge" onclick="duoNext()">Передать ход: ${esc(PLAYERS[nxt].name)}</button><button class="btn" onclick="duoCancel()">Закончить</button>`
+  : `<button class="btn primary huge" onclick="duoNext()">Общий итог</button>`;}
 
 if(typeof document!=='undefined'){document.addEventListener('DOMContentLoaded',()=>{render();initDb();});}
 
