@@ -173,12 +173,15 @@ textarea.field{width:100%;margin-top:8px;font-size:12px}
  .hist li{grid-template-columns:1fr auto;}.hist li span:first-child{grid-column:1/-1}.lv{grid-template-columns:32px 1fr auto}.lv .stars{display:none}
  .acc li{grid-template-columns:90px 1fr 42px}.acc li .small{display:none}.wrap{padding:10px 12px 40px}.page{padding:16px}.grade{width:100px;height:100px;font-size:80px}.cd{min-height:48px}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
-</style></head><body>
+</style>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+</head><body>
 <div class="wrap">
 <header><h1>Устный счёт<small id="hello">Дана</small></h1><div id="stats"></div></header>
 <nav id="nav"></nav>
 <main id="main"></main>
-<div id="sync" data-s="local"></div><div class="ver">версия 3</div>
+<div id="sync" data-s="local"></div><div class="ver">версия 4</div>
 </div>
 <script>
 // ===== Генераторы задач =====
@@ -345,6 +348,13 @@ function g15(t){
 
 // ===== Состояние =====
 const LS='ustny-schet-v1', LS_S='ustny-schet-sessions-v1';
+// Команда: общий ключ семьи. Кто его знает — видит и пишет данные команды.
+const TEAM='6483edbc5f4c03382ed8c98ce267f9b3';
+const FB={apiKey:"AIzaSyCH6eyWzKa_MtqGV4NLNvHshNGXL5Cm7bw",authDomain:"dana-schet.firebaseapp.com",projectId:"dana-schet",storageBucket:"dana-schet.firebasestorage.app",messagingSenderId:"1021967403210",appId:"1:1021967403210:web:fbb315dadc3965b8130c33"};
+const LS_WHO='ustny-schet-who';
+const PLAYERS={dana:{name:'Дана',adult:false},papa:{name:'Папа',adult:true}};
+let WHO=null; try{WHO=localStorage.getItem(LS_WHO);}catch(e){}
+const lsKey=()=>LS+(WHO?'-'+WHO:'');
 const TODAY=()=>dkey(new Date());
 function dkey(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function fresh(){return {v:1,updatedAt:0,name:'Дана',pin:null,
@@ -372,28 +382,39 @@ const lvlXp=l=>150*(l-1)*(l-1);
 
 // ===== Синхронизация с базой артефакта =====
 let DB=null, writing=false, dirty=false;
-function save(){S.updatedAt=Date.now();try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){}pushState();}
+function save(){S.updatedAt=Date.now();try{localStorage.setItem(lsKey(),JSON.stringify(S));}catch(e){}pushState();pushDays();}
 function saveSess(){try{localStorage.setItem(LS_S,JSON.stringify(SESS.slice(-1500)));}catch(e){}}
 async function pushState(){if(!DB)return;if(writing){dirty=true;return;}writing=true;
- try{await DB.doc('app/state').set(JSON.parse(JSON.stringify(S)));}catch(e){setSync('error');}
+ try{await DB.doc('players/'+WHO).set(JSON.parse(JSON.stringify(S)));}catch(e){setSync('error');}
  writing=false;if(dirty){dirty=false;pushState();}else setSync('ok');}
-async function pushSession(s){if(!DB)return;try{await DB.collection('sessions').doc(s.id).set(s);}catch(e){}}
+async function pushSession(s){if(!DB)return;try{await DB.collection('sessions').doc(s.id).set(Object.assign({who:WHO},s));}catch(e){}}
+// Для команды публикуем только факт «норма выполнена» по датам, без подробностей
+async function pushDays(){if(!DB||!WHO)return;
+ try{await DB.doc('team/days').set({[WHO]:Object.fromEntries(Object.entries(S.days).map(([k,d])=>[k,taskDone(k)]))},{merge:true});}catch(e){}}
 function setSync(st){const el=document.getElementById('sync');if(!el)return;el.textContent=st==='ok'?'Синхронизировано':st==='error'?'Нет связи с облаком':'Только на этом компьютере';el.dataset.s=st;}
 async function initDb(){
- if(!(window.claude&&window.claude.use)){setSync('local');return;}
- let db=null;try{db=await window.claude.use('db');}catch(e){}
+ if(!WHO){setSync('local');return;}
+ let db=null;
+ try{
+  if(window.firebase&&FB.apiKey){
+   if(!firebase.apps.length)firebase.initializeApp(FB);
+   const fs=firebase.firestore();
+   await fs.enablePersistence({synchronizeTabs:true}).catch(()=>{});
+   db={doc:pt=>fs.doc('teams/'+TEAM+'/'+pt),collection:pt=>fs.collection('teams/'+TEAM+'/'+pt)};
+  }
+ }catch(e){}
  if(!db){setSync('local');return;}
  DB=db;
- try{const snap=await db.doc('app/state').get();
-  if(snap.exists&&snap.data().updatedAt>S.updatedAt){S=Object.assign(fresh(),JSON.parse(JSON.stringify(snap.data())));try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){}}
-  else if(S.updatedAt)await db.doc('app/state').set(JSON.parse(JSON.stringify(S)));
+ try{const snap=await db.doc('players/'+WHO).get();
+  if(snap.exists&&snap.data().updatedAt>S.updatedAt){S=Object.assign(fresh(),JSON.parse(JSON.stringify(snap.data())));try{localStorage.setItem(lsKey(),JSON.stringify(S));}catch(e){}}
+  else if(S.updatedAt)await db.doc('players/'+WHO).set(JSON.parse(JSON.stringify(S)));
   const qs=await db.collection('sessions').orderBy('ts','desc').limit(1000).get();
   const have=new Set(SESS.map(s=>s.id)),remote=new Set();
-  qs.docs.forEach(d=>{remote.add(d.id);if(!have.has(d.id))SESS.push(JSON.parse(JSON.stringify(d.data())));});
+  qs.docs.forEach(d=>{const v=d.data();remote.add(d.id);if(v.who&&v.who!==WHO)return;if(!have.has(d.id))SESS.push(JSON.parse(JSON.stringify(v)));});
   SESS.sort((a,b)=>a.ts-b.ts);saveSess();
   for(const s of SESS.slice(-200))if(!remote.has(s.id))await pushSession(s);
   setSync('ok');
-  db.doc('app/state').onSnapshot(sn=>{if(!sn.exists)return;const d=sn.data();if(d.updatedAt>S.updatedAt&&!RUN){S=Object.assign(fresh(),JSON.parse(JSON.stringify(d)));try{localStorage.setItem(LS,JSON.stringify(S));}catch(e){}render();}});
+  db.doc('players/'+WHO).onSnapshot(sn=>{if(!sn.exists)return;const d=sn.data();if(d.updatedAt>S.updatedAt&&!RUN){S=Object.assign(fresh(),JSON.parse(JSON.stringify(d)));try{localStorage.setItem(lsKey(),JSON.stringify(S));}catch(e){}render();}});
  }catch(e){setSync('error');}
  render();}
 
@@ -442,11 +463,32 @@ function checkAch(ctx){const got=[];const g=id=>{if(!S.ach[id]){S.ach[id]=Date.n
  let green=true;for(let a=2;a<=9;a++)for(let b=a;b<=9;b++){const f=S.facts[a+'×'+b];if(!f||f.n<3||f.ok/f.n<.9||f.ms/f.n>5000)green=false;}if(green)g('table');
  return got;}
 
+// ===== Кто занимается =====
+function vWho(){return `<section class="page narrow who">
+ <h2>Кто занимается?</h2>
+ <p class="muted">Выбор запомнится на этом устройстве. Сменить можно в «Родителям».</p>
+ <div class="row" style="margin-top:18px">
+  <button class="btn primary huge" onclick="setWho('dana')">Дана</button>
+  <button class="btn huge" onclick="setWho('papa')">Папа</button>
+ </div></section>`;}
+function setWho(id){
+ if(id==='papa'&&S.pin){const v=prompt('PIN папы');if(v!==S.pin)return;}
+ // разовый перенос прогресса, накопленного до разделения профилей
+ try{const old=localStorage.getItem(LS);
+  if(old&&id==='dana'&&!localStorage.getItem(LS+'-dana')){localStorage.setItem(LS+'-dana',old);localStorage.removeItem(LS);}
+ }catch(e){}
+ WHO=id;try{localStorage.setItem(LS_WHO,id);}catch(e){}
+ S=fresh();S.name=PLAYERS[id].name;SESS=[];
+ try{const x=JSON.parse(localStorage.getItem(LS+'-'+id)||'null');if(x&&x.v)S=Object.assign(fresh(),x);}catch(e){}
+ PARENT_OK=false;render();initDb();}
+function clearWho(){if(!confirm('Сменить игрока?'))return;try{localStorage.removeItem(LS_WHO);}catch(e){}WHO=null;DB=null;PARENT_OK=false;render();}
+
 // ===== Навигация =====
 let TAB='today', RUN=null, PARENT_OK=false, CAL=new Date();
 function go(t){TAB=t;render();window.scrollTo(0,0);}
 function render(){
  if(RUN)return;
+ if(!WHO){$('#nav').innerHTML='';$('#stats').innerHTML='';$('#main').innerHTML=vWho();return;}
  const tabs=[['today','Сегодня'],['levels','Уровни'],['weak','Слабые места'],['diary','Дневник'],['rewards','Награды'],['parent','Родителям']];
  $('#nav').innerHTML=tabs.map(([k,t])=>`<button class="tab${TAB===k?' on':''}" onclick="go('${k}')">${t}</button>`).join('');
  const st=streak();
@@ -565,7 +607,7 @@ function vParent(){
  <h3>Бонус монет</h3><div class="row"><input id="bonus" class="field sm" inputmode="numeric" placeholder="10"><button class="btn" onclick="giveBonus()">Начислить</button></div>
  </div><div>
  <h3>Задание на день</h3>
- <label class="row">Челленджей в день <input id="perDay" class="field sm" type="number" min="1" max="20" value="${st.perDay}"></label>
+ <label class="row">Челленджей в день для ${esc(PLAYERS[WHO].name)} <input id="perDay" class="field sm" type="number" min="1" max="20" value="${st.perDay}"></label>
  <label class="row">Уровень задания <select id="taskLvl"><option value="auto">Автоматически — текущий</option>${LEVELS.map(L=>`<option value="${L.id}" ${String(st.taskLevel)===String(L.id)?'selected':''}>${L.id}. ${esc(L.name)}</option>`).join('')}</select></label>
  <label class="row"><input id="needRv" type="checkbox" ${st.needReview?'checked':''}> Обязательная работа над ошибками</label>
  <label class="row"><input id="openAll" type="checkbox" ${st.openAll?'checked':''}> Открыть все уровни сразу</label>
@@ -573,7 +615,7 @@ function vParent(){
  <button class="btn primary" onclick="saveSet()">Сохранить</button>
  <h3>Призы</h3><ul class="prizes edit">${S.prizes.map(p=>`<li><input class="field" data-pid="${p.id}" data-k="name" value="${esc(p.name)}"><input class="field sm" data-pid="${p.id}" data-k="cost" type="number" value="${p.cost}"><button class="btn small" onclick="delPrize('${p.id}')">Убрать</button></li>`).join('')}</ul>
  <div class="row"><button class="btn" onclick="addPrize()">Добавить приз</button><button class="btn primary" onclick="savePrizes()">Сохранить призы</button></div>
- <h3>Данные</h3><div class="row"><button class="btn" onclick="exportData()">Скопировать резервную копию</button><button class="btn" onclick="importData()">Восстановить</button><button class="btn danger" onclick="resetAll()">Сбросить прогресс</button><button class="btn" onclick="PARENT_OK=false;render()">Выйти</button></div>
+ <h3>Данные</h3><div class="row"><button class="btn" onclick="exportData()">Скопировать резервную копию</button><button class="btn" onclick="importData()">Восстановить</button><button class="btn danger" onclick="resetAll()">Сбросить прогресс</button><button class="btn" onclick="clearWho()">Сменить игрока</button><button class="btn" onclick="PARENT_OK=false;render()">Выйти</button></div>
  <textarea id="dump" class="field" rows="3" placeholder="Сюда появится копия или вставьте её для восстановления"></textarea>
  <p class="muted small">PIN не защищает от взрослого — это просто дверца от случайных изменений.</p>
  </div></div></section>`;}
