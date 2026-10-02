@@ -488,7 +488,7 @@ let TAB='today', RUN=null, PARENT_OK=false, CAL=new Date();
 function go(t){TAB=t;render();window.scrollTo(0,0);}
 function render(){
  if(RUN)return;
- if(!WHO){$('#nav').innerHTML='';$('#stats').innerHTML='';$('#main').innerHTML=vWho();return;}
+ if(!WHO){$('#nav').innerHTML='';$('#stats').innerHTML='';$('#hello').textContent='';$('#main').innerHTML=vWho();return;}
  const tabs=[['today','Сегодня'],['levels','Уровни'],['weak','Слабые места'],['diary','Дневник'],['rewards','Награды'],['parent','Родителям']];
  $('#nav').innerHTML=tabs.map(([k,t])=>`<button class="tab${TAB===k?' on':''}" onclick="go('${k}')">${t}</button>`).join('');
  const st=streak();
